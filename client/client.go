@@ -25,7 +25,7 @@ type client struct {
 const maxSleepInMS = 240
 
 func (c *client) run(ctx context.Context) {
-	addr := fmt.Sprintf("%s/?%s=%d", c.serverAddr, server.ClientIDURLParam, c.clientID)
+	addr := fmt.Sprintf("%s?%s=%d", c.serverAddr, server.ClientIDURLParam, c.clientID)
 	done := false
 
 	for !done {

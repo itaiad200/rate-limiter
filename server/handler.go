@@ -44,6 +44,7 @@ func (h *handler) updates(w http.ResponseWriter, r *http.Request) {
 
 	var update Update
 	err := json.NewDecoder(r.Body).Decode(&update)
+	h.logger.Debug("Got an update", zap.Any("update", update))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

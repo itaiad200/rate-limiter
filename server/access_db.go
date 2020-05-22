@@ -27,8 +27,6 @@ type accessDB struct {
 	updater *updater
 }
 
-
-
 // accessRecord is the record saved in the db
 type accessRecord struct {
 	requests []access
@@ -36,7 +34,7 @@ type accessRecord struct {
 }
 
 type access struct{
-	t time.Time
+	ts    time.Time
 	times int
 }
 
@@ -64,12 +62,12 @@ func newAccessDB(logger *zap.Logger, up *updater, reqThresehold int, window time
 }
 
 func (db *accessDB) handleMultipleAccess(update Update) {
-	for clientID, acc := range update.UsersAccess{
+	for _, acc := range update.UsersAccess{
 		// locking by client id, handles retries
-		if db.accessMap.TryLock(clientID){
-			defer db.accessMap.Unlock(clientID)
+		if db.accessMap.TryLock(acc.ClientID){
+			defer db.accessMap.Unlock(acc.ClientID)
 
-			accessRec, loaded := db.loadOrStore(clientID, acc.LastRequest, acc.Count)
+			accessRec, loaded := db.loadOrStore(acc.ClientID, acc.LastRequest, acc.Count)
 			if !loaded{
 				// first time client access
 				continue
@@ -79,10 +77,10 @@ func (db *accessDB) handleMultipleAccess(update Update) {
 			// but we are paying with slightly less accurate window.
 			accessRec.requestsInWindow += acc.Count
 			accessRec.requests = append(accessRec.requests, access{
-				t:     acc.LastRequest,
+				ts:    acc.LastRequest,
 				times: acc.Count,
 			})
-			db.accessCount.Store(clientID, accessRec)
+			db.accessCount.Store(acc.ClientID, accessRec)
 		}
 	}
 }
@@ -96,7 +94,10 @@ func (db *accessDB) handleSingleAccess(clientID string) bool {
 		defer db.accessMap.Unlock(clientID)
 
 		if db.checkAndStoreAccess(clientID, now, 1){
-			db.updater.addToNextUpdate(clientID, now)
+			db.updater.ch <- userAccess{
+				access:   access{ts: now, times: 1},
+				clientID: clientID,
+			}
 			return true
 		}
 
@@ -120,7 +121,7 @@ func (db *accessDB) checkAndStoreAccess(clientID string, now time.Time, times in
 	i := 0
 	var acc access
 	for i, acc = range accessRec.requests {
-		if acc.t.Add(db.window).After(now) {
+		if acc.ts.Add(db.window).After(now) {
 			// first request in window
 			break
 		}
@@ -137,7 +138,7 @@ func (db *accessDB) checkAndStoreAccess(clientID string, now time.Time, times in
 	}
 
 	// client is under her limit
-	accessRec.requests = append(accessRec.requests, access{t: now, times: times})
+	accessRec.requests = append(accessRec.requests, access{ts: now, times: times})
 	accessRec.requestsInWindow += times
 	db.accessCount.Store(clientID, accessRec)
 
@@ -146,7 +147,7 @@ func (db *accessDB) checkAndStoreAccess(clientID string, now time.Time, times in
 
 func (db *accessDB) loadOrStore(clientID string, now time.Time, times int) (accessRecord, bool) {
 	newWindowRecord := accessRecord{
-		requests:         []access{{t: now, times: times}},
+		requests:         []access{{ts: now, times: times}},
 		requestsInWindow: times,
 	}
 

@@ -36,7 +36,17 @@ func Start(config Config) {
 	done := make(chan bool, 1)
 	quit := make(chan bool, 1)
 
-	server := newWebserver(logger, config)
+	ctx, cancel := context.WithCancel(context.Background())
+	updater := &updater{
+		logger:    logger,
+		interval:  5 * time.Second,
+		peersAddr: config.PeersAddr,
+		updates:   map[string]access{},
+		ch:        make(chan userAccess, 1000),
+	}
+	go updater.Start(ctx)
+
+	server := newWebserver(ctx, updater, logger, config)
 
 	// making sure the server drains requests before shutting down completely
 	go gracefullShutdown(server, logger, quit, done)
@@ -44,6 +54,7 @@ func Start(config Config) {
 	// exit on Enter press
 	go func() {
 		block.Enter()
+		cancel()
 		quit <- true
 	}()
 
@@ -75,19 +86,15 @@ func gracefullShutdown(server *http.Server, logger *zap.Logger, quit chan bool, 
 // updatesEP the endpoint of the updates sent between servers
 const updatesEP = "/updates"
 
-func newWebserver(logger *zap.Logger, config Config) *http.Server {
+func newWebserver(ctx context.Context, up *updater, logger *zap.Logger, config Config) *http.Server {
 	router := http.NewServeMux()
-	updater := &updater{
-		logger:    logger,
-		interval:  5 * time.Second,
-		peersAddr: config.PeersAddr,
-	}
+
 
 	// requestsHandler is handling a customer calling any of our API.
 	// TODO: if we had real API calls here, this should be registered as a middleware
 	requestsHandler := &handler{
 		logger,
-		newAccessDB(logger, updater, config.RequestTH, config.Window),
+		newAccessDB(logger, up, config.RequestTH, config.Window),
 	}
 
 	// handle clients requests

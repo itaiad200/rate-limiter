@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	numClients := flag.Int("num-of-clients", 100, "Number of clients to simulate")
+	numClients := flag.Int("num-of-clients", 1, "Number of clients to simulate")
 	maxClientID := flag.Int("max-client-id", math.MaxInt32, "Maximum client id (Used for creating multiple client per id)")
 	serverAddr := flag.String("address", "http://localhost:8080/foo", "The clients endpoint of the server")
 	verbose := flag.Bool("verbose", false, "Verbose prints debug logs")

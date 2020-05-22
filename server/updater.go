@@ -16,27 +16,52 @@ type updater struct {
 	logger *zap.Logger
 
 	interval time.Duration
-	updates map[string]Access
+	updates  map[string]access
+	ch       chan userAccess
+
 	sync.Mutex
 	peersAddr []string
 }
 
-func (up *updater) addToNextUpdate(clientID string, t time.Time){
-	up.Lock()
-	defer up.Unlock()
+type userAccess struct {
+	access
+	clientID string
+}
 
-	up.updates[clientID] = Access{
-		LastRequest: t,
-		Count:       up.updates[clientID].Count + 1,
+func (up *updater) Start(ctx context.Context) {
+	go up.sendPeriodically(ctx)
+	up.readUpdate(ctx)
+}
+
+func (up *updater) readUpdate(ctx context.Context){
+	for{
+		var acc userAccess
+		select {
+		case <-ctx.Done():
+			return
+		case acc = <-up.ch:
+		}
+
+		up.addToMap(acc)
 	}
 }
 
-func (up *updater) Run(ctx context.Context) error{
+func (up *updater) addToMap(acc userAccess) {
+	up.Lock()
+	defer up.Unlock()
+
+	up.updates[acc.clientID] = access{
+		ts:    acc.ts,
+		times: acc.times + up.updates[acc.clientID].times,
+	}
+}
+
+func (up *updater) sendPeriodically(ctx context.Context){
 	for{
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
-			case <-time.After(up.interval):
+			return
+		case <-time.After(up.interval):
 		}
 
 		// send updates to all servers
@@ -48,13 +73,26 @@ func (up *updater) sendUpdates() {
 	up.Lock()
 	defer up.Unlock()
 
-	var wg sync.WaitGroup
+	if len(up.updates) == 0{
+		up.logger.Debug("Nothing to update")
+		return
+	}
 
+	updatesAPI := Update{}
+	for id, acc := range up.updates{
+		updatesAPI.UsersAccess = append(updatesAPI.UsersAccess, Access{
+			ClientID:    id,
+			LastRequest: acc.ts,
+			Count:       acc.times,
+		})
+	}
+
+	var wg sync.WaitGroup
 	for _, addr := range up.peersAddr{
 		wg.Add(1)
 		l := addr
 		go func() {
-			up.sendRequest(l)
+			up.sendRequest(l, updatesAPI)
 			wg.Done()
 		}()
 	}
@@ -63,17 +101,17 @@ func (up *updater) sendUpdates() {
 
 	// if some server request failed, it missed the update for good
 	// TODO: keep unsuccessful updates per server for next time
-	up.updates = nil
+	up.updates = map[string]access{}
 }
 
-func (up *updater) sendRequest(addr string) {
-	body, err := json.Marshal(up.updates)
+func (up *updater) sendRequest(addr string, updateAPI Update) {
+	body, err := json.Marshal(updateAPI)
 	if err != nil{
 		up.logger.Error("Failed to deserialize updates", zap.Error(err))
 		return
 	}
 
-	req, err := http.NewRequest("POST", addr+updatesEP, bytes.NewBuffer(body))
+	req, err := http.NewRequest("POST", "http://" +addr+updatesEP, bytes.NewBuffer(body))
 	if err != nil{
 		up.logger.Error("Failed to create request", zap.Error(err))
 		return
@@ -93,5 +131,8 @@ func (up *updater) sendRequest(addr string) {
 
 	if resp.StatusCode != http.StatusOK{
 		up.logger.Error("Bad server response", zap.Int("StatusCode", resp.StatusCode))
+		return
 	}
+
+	up.logger.Debug("Updated successfully", zap.Any("updates", up.updates))
 }
